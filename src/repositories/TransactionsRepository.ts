@@ -11,6 +11,7 @@ interface Balance {
 @EntityRepository(Transaction)
 class TransactionsRepository extends Repository<Transaction> {
   public async getBalance(): Promise<Balance> {
+    return { income: 0, outcome: 0, total: 0 };
     // TODO
   }
 }
