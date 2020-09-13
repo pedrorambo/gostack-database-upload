@@ -13,29 +13,30 @@ class TransactionsRepository extends Repository<Transaction> {
   public async getBalance(): Promise<Balance> {
     const transactions = await this.find();
 
-    const balance = transactions.reduce(
-      (accumulator, { type, value }: Transaction) => {
-        const valueNumber = Number(value);
-        switch (type) {
-          case 'income':
-            accumulator.income += valueNumber;
-            accumulator.total += valueNumber;
-            break;
-          case 'outcome':
-            accumulator.outcome += valueNumber;
-            accumulator.total -= valueNumber;
-            break;
-          default:
-            break;
-        }
-        return accumulator;
-      },
-      {
-        total: 0,
-        outcome: 0,
-        income: 0,
-      },
-    );
+    const calculateBalanceReducer = (
+      accumulator: Balance,
+      { type, value }: Transaction,
+    ): Balance => {
+      const numericValue = Number(value);
+      switch (type) {
+        case 'income':
+          accumulator.income += numericValue;
+          break;
+        case 'outcome':
+          accumulator.outcome += numericValue;
+          break;
+        default:
+          break;
+      }
+      accumulator.total = accumulator.income - accumulator.outcome;
+      return accumulator;
+    };
+
+    const balance = transactions.reduce(calculateBalanceReducer, {
+      total: 0,
+      outcome: 0,
+      income: 0,
+    });
 
     return balance;
   }
