@@ -1,8 +1,7 @@
 import csvParse from 'csv-parse';
 import fs from 'fs';
-import { getRepository } from 'typeorm';
 import Transaction from '../models/Transaction';
-import Category from '../models/Category';
+import CreateTransactionService from './CreateTransactionService';
 
 interface CSVTransaction {
   title: string;
@@ -17,6 +16,38 @@ interface RequestDTO {
 
 class ImportTransactionsService {
   async execute({ filePath }: RequestDTO): Promise<Transaction[]> {
+    const transactions = await this.loadTransactionsFromFile(filePath);
+    const createdTransactions = await this.createTransactions(transactions);
+    await fs.promises.unlink(filePath);
+    return createdTransactions;
+  }
+
+  private async createTransactions(
+    csvTransaction: CSVTransaction[],
+  ): Promise<Transaction[]> {
+    const createTransactionService = new CreateTransactionService();
+
+    const createTransactionsPromises = csvTransaction.map(
+      async ({ type, category_title, value, title }: CSVTransaction) => {
+        const transaction = await createTransactionService.execute({
+          value,
+          category_title,
+          type,
+          title,
+        });
+
+        return transaction;
+      },
+    );
+
+    const createdTransactions = await Promise.all(createTransactionsPromises);
+
+    return createdTransactions;
+  }
+
+  private async loadTransactionsFromFile(
+    filePath: string,
+  ): Promise<CSVTransaction[]> {
     const readStream = fs.createReadStream(filePath);
 
     const parser = csvParse({
@@ -44,48 +75,7 @@ class ImportTransactionsService {
 
     await new Promise(resolve => parseObject.on('end', resolve));
 
-    const createdTransactions = await this.createTransactions(transactions);
-
-    await fs.promises.unlink(filePath);
-    await Promise.all(createdTransactions);
-    return createdTransactions;
-  }
-
-  private async createTransactions(
-    csvTransaction: CSVTransaction[],
-  ): Promise<Transaction[]> {
-    const categoriesRepository = getRepository(Category);
-    const transactionsRepository = getRepository(Transaction);
-
-    const createTransactionsPromises = csvTransaction.map(
-      async ({ type, category_title, value, title }: CSVTransaction) => {
-        let category = await categoriesRepository.findOne({
-          where: {
-            title: category_title,
-          },
-        });
-
-        if (!category) {
-          category = categoriesRepository.create({ title: category_title });
-          await categoriesRepository.save(category);
-        }
-
-        const transaction = transactionsRepository.create({
-          title,
-          value,
-          type,
-          category,
-        });
-
-        await transactionsRepository.save(transaction);
-
-        return transaction;
-      },
-    );
-
-    const createdTransactions = await Promise.all(createTransactionsPromises);
-
-    return createdTransactions;
+    return transactions;
   }
 }
 
