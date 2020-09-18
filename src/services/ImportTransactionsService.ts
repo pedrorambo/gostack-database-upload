@@ -1,81 +1,112 @@
 import csvParse from 'csv-parse';
 import fs from 'fs';
+
+import { getCustomRepository, getRepository, In } from 'typeorm';
+
 import Transaction from '../models/Transaction';
-import CreateTransactionService from './CreateTransactionService';
+import Category from '../models/Category';
+import TransactionsRepository from '../repositories/TransactionsRepository';
 
 interface CSVTransaction {
   title: string;
-  value: number;
   type: 'income' | 'outcome';
-  category_title: string;
+  value: number;
+  category: string;
 }
 
 interface RequestDTO {
   filePath: string;
 }
 
+interface TransactionsCategoriesDTO {
+  transactions: CSVTransaction[];
+  categories: string[];
+}
+
 class ImportTransactionsService {
   async execute({ filePath }: RequestDTO): Promise<Transaction[]> {
-    const transactions = await this.loadTransactionsFromFile(filePath);
-    const createdTransactions = await this.createTransactions(transactions);
-    await fs.promises.unlink(filePath);
-    return createdTransactions;
-  }
-
-  private async createTransactions(
-    csvTransaction: CSVTransaction[],
-  ): Promise<Transaction[]> {
-    const createTransactionService = new CreateTransactionService();
-
-    const createTransactionsPromises = csvTransaction.map(
-      async ({ type, category_title, value, title }: CSVTransaction) => {
-        const transaction = await createTransactionService.execute({
-          value,
-          category_title,
-          type,
-          title,
-        });
-
-        return transaction;
-      },
+    const { transactions, categories } = await this.getCSVTransactionsFromFile(
+      filePath,
     );
 
-    const createdTransactions = await Promise.all(createTransactionsPromises);
+    const createdTransactions = await this.createTransactions({
+      transactions,
+      categories,
+    });
+
+    await fs.promises.unlink(filePath);
 
     return createdTransactions;
   }
 
-  private async loadTransactionsFromFile(
-    filePath: string,
-  ): Promise<CSVTransaction[]> {
-    const readStream = fs.createReadStream(filePath);
+  private async createTransactions({
+    transactions,
+    categories,
+  }: TransactionsCategoriesDTO): Promise<Transaction[]> {
+    const categoriesRepository = getRepository(Category);
+    const transactionsRepository = getCustomRepository(TransactionsRepository);
 
-    const parser = csvParse({
-      from_line: 2,
+    const existentCategories = await categoriesRepository.find({
+      where: { title: In(categories) },
     });
 
-    const parseObject = readStream.pipe(parser);
+    const existentCategoriesTitles = existentCategories.map(
+      (category: Category) => category.title,
+    );
+
+    const categoryTitlesToAdd = categories
+      .filter(category => !existentCategoriesTitles.includes(category))
+      .filter((value, index, self) => self.indexOf(value) === index);
+
+    const newCategories = categoriesRepository.create(
+      categoryTitlesToAdd.map(title => ({
+        title,
+      })),
+    );
+    await categoriesRepository.save(newCategories);
+
+    const transactionCategories = [...newCategories, ...existentCategories];
+
+    const createdTransactions = transactionsRepository.create(
+      transactions.map(transaction => ({
+        title: transaction.title,
+        type: transaction.type,
+        value: transaction.value,
+        category: transactionCategories.find(
+          category => category.title === transaction.category,
+        ),
+      })),
+    );
+    await transactionsRepository.save(createdTransactions);
+
+    return createdTransactions;
+  }
+
+  private async getCSVTransactionsFromFile(filePath: string) {
+    const readStream = fs.createReadStream(filePath);
+    const parser = csvParse({ from_line: 2 });
+    const parserCSV = readStream.pipe(parser);
 
     const transactions: CSVTransaction[] = [];
+    const categories: string[] = [];
 
-    parseObject.on('data', async line => {
+    parserCSV.on('data', async line => {
       const [title, type, value, category] = line.map((cell: string) =>
         cell.trim(),
       );
 
-      const transaction: CSVTransaction = {
-        title,
-        type,
-        value,
-        category_title: category,
-      };
+      if (!title || !type || !value) return;
 
-      transactions.push(transaction);
+      categories.push(category);
+      transactions.push({ title, type, value, category });
     });
 
-    await new Promise(resolve => parseObject.on('end', resolve));
+    await new Promise(resolve => parserCSV.on('end', resolve));
 
-    return transactions;
+    return {
+      transactions,
+      categories,
+    };
   }
 }
 
